@@ -10,13 +10,14 @@ fi
 # Default values
 ADDONS_PATH=""
 OUTPUT_PATH="./output"
-MODEL="gpt-4o"
-MAX_WORKERS=4
+MODEL="grok-3-beta"
+MAX_WORKERS=6
 MAX_FILE_TOKENS=3500
 BATCH_SIZE=10
 RATE_LIMIT=10.0
 BASE_URL=""
 MERGE_ONLY=0
+EMAIL_NOTIFICATION=""
 
 # Set HTTP proxy if needed (this will be used by OpenAI library automatically)
 # export HTTP_PROXY=127.0.0.1:7890
@@ -61,6 +62,10 @@ while [[ $# -gt 0 ]]; do
             MERGE_ONLY=1
             shift
             ;;
+        --email-notification)
+            EMAIL_NOTIFICATION="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -72,7 +77,8 @@ done
 if [ -z "$ADDONS_PATH" ] && [ $MERGE_ONLY -eq 0 ]; then
     echo "Error: --addons-path is required."
     echo "Usage: ./run.sh --addons-path /path/to/addons [--output-path ./output] [--model gpt-4o] [--max-workers 4]"
-    echo "                [--max-file-tokens 3500] [--batch-size 10] [--rate-limit 10.0] [--base-url URL] [--merge-only]"
+    echo "                [--max-file-tokens 3500] [--batch-size 10] [--rate-limit 10.0] [--base-url URL]"
+    echo "                [--merge-only] [--email-notification email@example.com]"
     echo
     echo "Note: HTTP proxy should be set as environment variables:"
     echo "      export HTTP_PROXY=127.0.0.1:7890"
@@ -91,6 +97,11 @@ fi
 # Add merge-only flag if specified
 if [ $MERGE_ONLY -eq 1 ]; then
     CMD="$CMD --merge-only"
+fi
+
+# Add email notification if specified
+if [ ! -z "$EMAIL_NOTIFICATION" ]; then
+    CMD="$CMD --email-notification $EMAIL_NOTIFICATION"
 fi
 
 # Print the command (without API key)

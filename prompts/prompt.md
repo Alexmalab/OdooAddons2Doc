@@ -5,7 +5,7 @@ You must read the provided source code file content: {module/path/file} (this is
 Each chunk must represent a single, logical, retrievable unit of information, focusing on defining models, fields, methods, views, controllers, templates, manifests, security rules, or other functional elements.
 
 **Chunking Rules**:
-- For a `__manifest__.py`, create one chunk describing the module's metadata and dependencies.
+- For a `__manifest__.py`, create one chunk describing the module's metadata(must include name in `codeDescription`) and dependencies.
 - For each Python file:
     - Create one separate chunk for all import statements at the top of the file.
     - Create one separate chunk for all constants defined at the top of the file.
@@ -54,17 +54,18 @@ Each chunk must represent a single, logical, retrievable unit of information, fo
     - Separate utility classes into logical groups
 - For `ir.model.access.csv` files, create one chunk describing the module's model access rule.
 - Always split definitions into separate logical chunks even if the file is small. **Consistency over dynamic size adjustment**.
-
+- If user sent you an invalid file by fault, just output `WRONG INPUT`.
 **Output JSON Format**:
 ```json
 [{
-  "codeTitle": "Short and clear title (e.g., 'Defining Sale Order Model in Python', 'Defining AccountPortalSidebar Component in Javascript.')",
+  "moduleName":"{module_technical_name}",
+  "codeTitle": "Short and clear title (e.g., 'AccountMove Model Extension for WMS Accounting', 'Load Action by ID or External Reference in Action Controller')",
   "codeDescription": "Concise and detailed description explaining the purpose, context, and important notes.",
   "codePath": "{file_path}#L{start_line}-L{end_line}",
-  "moduleContext": "Broader module or the functions it belongs to (e.g., 'Implementing Components on Portal for Account Module')",
-  "codeType": "model|method|route|view|component|hook|mixin|imports|registration|styles|variables|media-query,etc.",
+  "moduleContext": "{Module Name} - {Functional Domain} - {Role}(If it has) (e.g., 'WMS Accounting - Define StockAccountForecastedHeader Component - Patch ForecastedHeader')",
+  "codeType": "model|method|route|view|template|data-record|report|component|hook|mixin|imports|registration|styles|variables|media-query,etc.",
   "codeContent": {
-      "language": "python|javascript|xml|csv|css|scss",,
+      "language": "python|javascript|xml|csv|css|scss",
       "code": "Actual code here"
     }
 },...
