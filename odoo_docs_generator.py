@@ -35,7 +35,7 @@ ENCODING = tiktoken.encoding_for_model("gpt-4")  # Change to match the model you
 class OdooDocsGenerator:
     def __init__(self, addons_path: str, output_path: str, api_key: str, model: str = "gpt-4o", max_workers: int = 4,
                  max_file_tokens: int = MAX_TOKENS, batch_size: int = 10, rate_limit: float = 10.0,
-                 base_url: Optional[str] = None):
+                 base_url: Optional[str] = None, force: bool = False):
         self.addons_path = Path(addons_path)
         self.output_path = Path(output_path)
         self.model = model
@@ -44,7 +44,15 @@ class OdooDocsGenerator:
         self.batch_size = batch_size  # 每批处理的模块数量
         self.rate_limit = rate_limit  # API请求频率限制 (每秒请求数)
         self.base_url = base_url  # API基础URL
-
+        self.force = force  # 是否强制处理所有文件，包括已处理过的
+        
+        # 统计信息
+        self.stats = {
+            "skipped_files": 0,
+            "processed_files": 0,
+            "failed_files": 0
+        }
+        
         # 初始化请求速率限制器
         self.rate_limiter = threading.Semaphore(max_workers)  # 限制并发请求数
         self.last_request_time = time.time()
@@ -230,11 +238,26 @@ class OdooDocsGenerator:
         except Exception as e:
             logger.error(f"Error recording failed request to CSV: {e}\n{traceback.format_exc()}")
 
+    def _get_output_file_path(self, file_path: Path, module_name: str) -> Path:
+        """Determine the output file path for a given input file."""
+        relative_path = file_path.relative_to(self.addons_path / module_name)
+        output_dir = self.output_path / module_name / relative_path.parent
+        output_file = output_dir / f"{file_path.name}.json"
+        return output_file
+
     def process_file(self, file_path: Path, module_name: str):
         """处理单个文件并返回文档块"""
         try:
             file_path = Path(file_path)
             display_path = str(file_path.relative_to(self.addons_path))
+            
+            # Check if output file already exists (file already processed)
+            output_file = self._get_output_file_path(file_path, module_name)
+            if output_file.exists() and not self.force:
+                logger.info(f"Skipping already processed file: {display_path}")
+                self.stats["skipped_files"] += 1
+                return []
+                
             logger.info(f"Processing file: {display_path}")
 
             # 读取文件内容
@@ -306,20 +329,24 @@ class OdooDocsGenerator:
                 try:
                     # 使用简单的函数校验JSON格式
                     if '[{' in content and '}]' in content or '{' in content and '}' in content:
+                        self.stats["processed_files"] += 1
                         return content
                     else:
                         error_msg = "No JSON-like content found in the response"
                         self._record_failed_request(module_name, file_path, error_msg)
+                        self.stats["failed_files"] += 1
                         raise ValueError(error_msg)
                 except Exception as e:
                     logger.error(f"Unable parse JSON file from response. file: {file_path}: {e}\n{traceback.format_exc()}")
                     # 保存原始响应以便调试
                     self._save_error_response(content, file_path, module_name)
                     self._record_failed_request(module_name, file_path, f"Failed to parse JSON: {str(e)}")
+                    self.stats["failed_files"] += 1
                     return []
             except Exception as e:
                 logger.error(f"When processing file: {file_path} error: {e}\n{traceback.format_exc()}")
                 self._record_failed_request(module_name, file_path, f"Processing error: {str(e)}")
+                self.stats["failed_files"] += 1
                 return []
         except Exception as e:
             logger.error(f"When processing file: {file_path} error: {e}\n{traceback.format_exc()}")
@@ -343,13 +370,13 @@ class OdooDocsGenerator:
         if not results:
             return
 
+        # Get output file path
+        output_file = self._get_output_file_path(file_path, module_name)
+        
         # Create output directory structure
-        relative_path = file_path.relative_to(self.addons_path / module_name)
-        output_dir = self.output_path / module_name / relative_path.parent
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Save to file
-        output_file = output_dir / f"{file_path.name}.json"
         with open(output_file, 'w', encoding='utf-8') as f:
             # Write content directly
             f.write(results)
@@ -459,6 +486,13 @@ class OdooDocsGenerator:
 
     def run(self, should_merge=False):
         """Run the document generation process"""
+        # Reset statistics
+        self.stats = {
+            "skipped_files": 0,
+            "processed_files": 0,
+            "failed_files": 0
+        }
+        
         if self.batch_size > 0:
             # Process modules in batches
             self.process_modules_in_batches(should_merge)
@@ -483,7 +517,14 @@ class OdooDocsGenerator:
                     if should_merge:
                         self.merge_module_results(module_dir.name)
 
-        logger.info("Document generation finished")
+        # Log statistics
+        logger.info(f"Document generation finished with statistics:")
+        logger.info(f"  Skipped files (already processed): {self.stats['skipped_files']}")
+        logger.info(f"  Successfully processed files: {self.stats['processed_files']}")
+        logger.info(f"  Failed files: {self.stats['failed_files']}")
+        logger.info(f"  Total files encountered: {sum(self.stats.values())}")
+        
+        return self.stats
 
 def main():
     parser = argparse.ArgumentParser(description='为Odoo模块生成文档')
@@ -499,6 +540,7 @@ def main():
     parser.add_argument('--rate-limit', type=float, default=10.0, help='API请求速率限制 (每秒请求数),设为0禁用速率限制')
     parser.add_argument('--base-url', help='API基础URL,例如 https://api.x.ai/v1')
     parser.add_argument('--email-notification', help='Email address for completion notification')
+    parser.add_argument('--force', action='store_true', help='Force processing of all files, even if they have already been processed')
 
     args = parser.parse_args()
 
@@ -511,10 +553,12 @@ def main():
         max_file_tokens=args.max_file_tokens,
         batch_size=args.batch_size,
         rate_limit=args.rate_limit,
-        base_url=args.base_url
+        base_url=args.base_url,
+        force=args.force
     )
 
     success = True
+    stats = None
     try:
         if args.merge_only:
             modules = generator.get_module_list()
@@ -523,7 +567,7 @@ def main():
             logger.info("Merge current results completed.")
         else:
             # Pass the should_merge parameter to control merging behavior
-            generator.run(should_merge=args.should_merge)
+            stats = generator.run(should_merge=args.should_merge)
     except Exception as e:
         logger.error(f"An error occurred: {e}\n{traceback.format_exc()}")
         success = False
@@ -532,6 +576,18 @@ def main():
         if args.email_notification:
             status = "completed successfully" if success else "failed with errors"
             subject = f"Odoo Docs Generator {status} - {socket.gethostname()}"
+            
+            # Prepare body with statistics if available
+            stats_text = ""
+            if stats:
+                stats_text = f"""
+Statistics:
+  Skipped files (already processed): {stats['skipped_files']}
+  Successfully processed files: {stats['processed_files']}
+  Failed files: {stats['failed_files']}
+  Total files encountered: {sum(stats.values())}
+"""
+            
             body = f"""
 Odoo Documentation Generator completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
@@ -539,6 +595,8 @@ Status: {status}
 Host: {socket.gethostname()}
 Addons Path: {args.addons_path}
 Output Path: {args.output_path}
+Force mode: {'Enabled' if args.force else 'Disabled'}
+{stats_text}
 """
             send_notification_email(args.email_notification, subject, body)
 
