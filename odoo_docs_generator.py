@@ -12,6 +12,7 @@ import time
 import threading
 import traceback
 import sys
+import re
 from email_notifier import send_notification_email
 import socket
 from datetime import datetime
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 BLACKLIST_EXTENSIONS = {'.pyc', '.pyo', '.mo', '.pot', '.git', '.svn', '.swp', '.swo', '.svg', '.png','.jpg','.md','.rst','.pdf','.gif','.xls','.xlsx'}
-BLACKLIST_DIRECTORIES = {'__pycache__', '.git', '.svn', 'node_modules', 'venv', 'env', '.venv', '.env', 'lib','xls','i18n'}
+# Patterns ending with * are treated as regex prefixes, e.g. 'i18n*' will match 'i18n', 'i18n_module', 'i18n_extra', etc.
+BLACKLIST_DIRECTORIES = {'__pycache__', '.git', '.svn', 'node_modules', 'venv', 'env', '.venv', '.env', 'lib', 'xls', 'demo', 'tools', 'i18n*', 'l10n*'}
 MAX_TOKENS = 10000  # Token limit for sending to API (adjust based on model)
 ENCODING = tiktoken.encoding_for_model("gpt-4")  # Change to match the model you're using
 
@@ -91,6 +93,27 @@ class OdooDocsGenerator:
             return []
 
         for item in self.addons_path.iterdir():
+            module_name = item.name
+            
+            # Skip if module name matches a blacklisted directory
+            if module_name in BLACKLIST_DIRECTORIES:
+                logger.info(f"Skipping module {module_name} - in blacklist")
+                continue
+                
+            # Check if module name matches any regex pattern in blacklist
+            should_skip = False
+            for pattern in BLACKLIST_DIRECTORIES:
+                # If pattern ends with *, treat it as a regex pattern
+                if pattern.endswith('*'):
+                    regex_pattern = f"^{pattern[:-1]}.*$"
+                    if re.match(regex_pattern, module_name):
+                        logger.info(f"Skipping module {module_name} - matches regex pattern {pattern}")
+                        should_skip = True
+                        break
+            
+            if should_skip:
+                continue
+                
             if item.is_dir() and (item / '__manifest__.py').exists():
                 module_dirs.append(item)
 
@@ -131,8 +154,29 @@ class OdooDocsGenerator:
         files_to_process = []
 
         for root, dirs, files in os.walk(module_dir):
-            # Skip blacklisted directories
-            dirs[:] = [d for d in dirs if d not in BLACKLIST_DIRECTORIES]
+            # Skip blacklisted directories (exact match and regex patterns)
+            filtered_dirs = []
+            for d in dirs:
+                # Check if directory name is in blacklist (exact match)
+                if d in BLACKLIST_DIRECTORIES:
+                    continue
+                
+                # Check if directory name matches any regex pattern in blacklist
+                is_blacklisted = False
+                for pattern in BLACKLIST_DIRECTORIES:
+                    # If pattern ends with *, treat it as a regex pattern
+                    if pattern.endswith('*'):
+                        regex_pattern = f"^{pattern[:-1]}.*$"
+                        if re.match(regex_pattern, d):
+                            is_blacklisted = True
+                            logger.debug(f"Skipping directory {d} - matches regex pattern {pattern}")
+                            break
+                
+                if not is_blacklisted:
+                    filtered_dirs.append(d)
+            
+            # Update dirs in-place to only include non-blacklisted directories
+            dirs[:] = filtered_dirs
 
             for file in files:
                 file_path = Path(root) / file
